@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2019 J. Nathanael Philipp <nathanael@philipp.land>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+import signal
+import sys
+
+from argparse import ArgumentParser
+from functools import partial
+
+
+STATE_OK = (0, 'OK')
+STATE_WARNING = (1, 'WARNING')
+STATE_CRITICAL = (2, 'CRITICAL')
+STATE_UNKNOWN = (3, 'UNKNOWN')
+
+__version__ = '0.1.0'
+
+
+try:
+    import requests
+except ImportError:
+    print(f'{STATE_UNKNOWN[1]} - Failed to import requests.')
+    sys.exit(STATE_UNKNOWN[0])
+
+
+def handle_sigalrm(signum, frame, timeout=None):
+    print(f'{STATE_UNKNOWN[1]} - Plugin timed out after {timeout:d} seconds.')
+    sys.exit(STATE_UNKNOWN[0])
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser(prog='chech_publicip')
+    parser.add_argument('-V', '--version', action='version',
+                        version=f'%(prog)s v{__version__}')
+    parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-t', '--timeout', default=10, type=int,
+                        help='Timeout in seconds (default 10s).')
+    parser.add_argument('-u', '--url', default='https://ipecho.net/plain',
+                        type=str, help='URL to get IP from (default ' +
+                        'https://ipecho.net/plain).')
+    parser.add_argument('-i', '--ip', required=True, type=str,
+                        help='The expected IP.')
+    args = parser.parse_args()
+
+    signal.signal(signal.SIGALRM, partial(handle_sigalrm, timeout=args.timeout))
+    signal.alarm(args.timeout)
+
+    try:
+        if args.verbose:
+            print(f'Get IP from {args.url}.')
+        r = requests.get(args.url)
+        if args.ip == r.text:
+            print(f'{STATE_OK[1]} - IP is {r.text}')
+            sys.exit(STATE_OK[0])
+        else:
+            print(f'{STATE_CRITICAL[1]} - IP is {r.text}')
+            sys.exit(STATE_CRITICAL[0])
+    except requests.exceptions.Timeout as e:
+        print(f'{STATE_WARNING[1]} - Timeout {e}')
+        sys.exit(STATE_WARNING[0])
+    except requests.exceptions.RequestException as e:
+        print(f'{STATE_CRITICAL[1]} - {e}')
+        sys.exit(STATE_CRITICAL[0])
+    except Exception as e:
+        print(f'{STATE_UNKNOWN[1]}\n{e}')
+        sys.exit(STATE_UNKNOWN[0])
