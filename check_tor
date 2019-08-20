@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2019 J. Nathanael Philipp <nathanael@philipp.land>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+#
+# This is a icinga script to check if tor is running.
+# Needs the tor control port to be set and stem.
+
+import signal
+import sys
+
+from argparse import ArgumentParser
+from functools import partial
+
+
+STATE_OK = (0, 'OK')
+STATE_WARNING = (1, 'WARNING')
+STATE_CRITICAL = (2, 'CRITICAL')
+STATE_UNKNOWN = (3, 'UNKNOWN')
+
+__version__ = '0.1.0'
+
+
+try:
+    from stem.control import Controller
+except ImportError:
+    print('Failed to import stem.')
+    sys.exit(STATE_UNKNOWN)
+
+
+def handle_sigalrm(signum, frame, timeout=None):
+    print(f'{STATE_UNKNOWN[1]} - Plugin timed out after {timeout:d} seconds.')
+    sys.exit(STATE_UNKNOWN[0])
+
+
+if __name__ == '__main__':
+    parser = ArgumentParser(prog='chech_tor')
+    parser.add_argument('-V', '--version', action='version',
+                        version=f'%(prog)s v{__version__}')
+    parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-t', '--timeout', default=10, type=int,
+                        help='Timeout in seconds (default 10s).')
+    parser.add_argument('-c', '--control-port', default=9051,
+                        help='Tor control port (default 9051).')
+    parser.add_argument('-p', '--password', type=str, default=None,
+                        help='Tor control port password.')
+    args = parser.parse_args()
+
+    signal.signal(signal.SIGALRM, partial(handle_sigalrm, timeout=args.timeout))
+    signal.alarm(args.timeout)
+
+    try:
+        if args.verbose:
+            print('Open connection to control port.')
+        with Controller.from_port(port=args.control_port) as controller:
+            controller.authenticate(args.password)
+            if args.verbose:
+                print(f'Tor version: {controller.get_version()}')
+
+            read = controller.get_info('traffic/read')
+            written = controller.get_info('traffic/written')
+            uptime = controller.get_info('uptime')
+            if controller.is_alive():
+                print(f"{STATE_OK[1]} - Tor is alive.|'read'={read}B " +
+                      f"'written'={written}B 'uptime'={uptime}s")
+                sys.exit(STATE_OK[0])
+            else:
+                print(f"{STATE_CRITICAL[1]} - Tor is down.|'read'={read}B " +
+                      f"'written'={written}B 'uptime'={uptime}s")
+                sys.exit(STATE_CRITICAL[0])
+    except Exception as e:
+        print(f'{STATE_UNKNOWN[1]}\n{e}')
+        sys.exit(STATE_UNKNOWN[0])
